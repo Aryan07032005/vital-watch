@@ -5,11 +5,71 @@ import AlertFeed from '@/components/AlertFeed';
 import VitalChart from '@/components/VitalChart';
 import { useVitalStream } from '@/hooks/useVitalStream';
 import { MOCK_PATIENTS, calculateRiskScore } from '@/lib/mockDataStream';
-import { useState } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { Alert as AlertType } from '@/lib/types';
+import { motion, AnimatePresence } from 'framer-motion';
+import { AlertTriangle, X, ArrowRight } from 'lucide-react';
+
+function CriticalPopup({ alert, onDismiss, onViewPatient }: { alert: AlertType; onDismiss: () => void; onViewPatient: (id: string) => void }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, scale: 0.9, y: -20 }}
+      animate={{ opacity: 1, scale: 1, y: 0 }}
+      exit={{ opacity: 0, scale: 0.9, y: -20 }}
+      className="fixed top-6 right-6 z-50 w-96 rounded-2xl border-2 border-destructive bg-card p-5 critical-flash"
+      style={{ boxShadow: 'var(--shadow-critical)' }}
+    >
+      <div className="flex items-start gap-3">
+        <div className="w-10 h-10 rounded-full bg-destructive/15 flex items-center justify-center flex-shrink-0">
+          <AlertTriangle className="w-5 h-5 text-destructive" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between mb-1">
+            <h4 className="text-sm font-bold text-destructive">🚨 CRITICAL ALERT</h4>
+            <button onClick={onDismiss} className="p-1 rounded-lg hover:bg-muted transition-colors">
+              <X className="w-4 h-4 text-muted-foreground" />
+            </button>
+          </div>
+          <p className="text-sm font-semibold text-foreground">{alert.patientName}</p>
+          <p className="text-sm text-muted-foreground mt-0.5">{alert.message}</p>
+          <p className="text-xs text-muted-foreground font-mono mt-1">
+            {new Date(alert.timestamp).toLocaleTimeString()}
+          </p>
+          <button
+            onClick={() => { onViewPatient(alert.patientId); onDismiss(); }}
+            className="mt-3 flex items-center gap-1.5 text-xs font-semibold text-secondary-foreground px-3 py-1.5 rounded-lg transition-all"
+            style={{ background: 'var(--gradient-accent)' }}
+          >
+            View Patient <ArrowRight className="w-3 h-3" />
+          </button>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
 
 export default function DoctorDashboard() {
   const { readings, history, alerts, thresholds, acknowledgeAlert } = useVitalStream();
   const [selectedId, setSelectedId] = useState(MOCK_PATIENTS[0].id);
+  const [popup, setPopup] = useState<AlertType | null>(null);
+  const seenAlertIds = useRef<Set<string>>(new Set());
+
+  // Watch for new critical alerts and show popup
+  const checkForCriticalAlerts = useCallback(() => {
+    for (const alert of alerts) {
+      if (alert.level === 'critical' && !alert.acknowledged && !seenAlertIds.current.has(alert.id)) {
+        seenAlertIds.current.add(alert.id);
+        setPopup(alert);
+        // Auto-dismiss after 8 seconds
+        setTimeout(() => setPopup(prev => prev?.id === alert.id ? null : prev), 8000);
+        break; // show one at a time
+      }
+    }
+  }, [alerts]);
+
+  useEffect(() => {
+    checkForCriticalAlerts();
+  }, [checkForCriticalAlerts]);
 
   const selectedPatient = MOCK_PATIENTS.find(p => p.id === selectedId)!;
   const reading = readings.get(selectedId);
@@ -17,6 +77,17 @@ export default function DoctorDashboard() {
 
   return (
     <DashboardLayout title="Doctor Dashboard">
+      {/* Critical popup */}
+      <AnimatePresence>
+        {popup && (
+          <CriticalPopup
+            alert={popup}
+            onDismiss={() => setPopup(null)}
+            onViewPatient={(id) => setSelectedId(id)}
+          />
+        )}
+      </AnimatePresence>
+
       {/* Patient selector */}
       <div className="flex gap-2 mb-6 overflow-x-auto pb-2">
         {MOCK_PATIENTS.map(p => {
@@ -52,7 +123,6 @@ export default function DoctorDashboard() {
             <RiskScoreMeter risk={calculateRiskScore(reading, thresholds)} patientName={selectedPatient.name} />
           </div>
 
-          {/* Patient info */}
           <div className="grid md:grid-cols-2 gap-4 mb-6">
             <div className="bg-card rounded-xl border border-border p-5" style={{ boxShadow: 'var(--shadow-card)' }}>
               <h3 className="text-sm font-semibold text-foreground mb-3">Patient Info</h3>
@@ -67,7 +137,6 @@ export default function DoctorDashboard() {
             <AlertFeed alerts={alerts.filter(a => a.patientId === selectedId)} onAcknowledge={acknowledgeAlert} maxItems={5} />
           </div>
 
-          {/* Charts */}
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
             <VitalChart history={patientHistory} vitalKey="heartRate" label="Heart Rate Trend" color="hsl(0, 72%, 51%)" />
             <VitalChart history={patientHistory} vitalKey="spo2" label="SpO₂ Trend" color="hsl(210, 70%, 50%)" />
